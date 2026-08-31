@@ -26,15 +26,13 @@ RUN apt-get update \
         ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# chromium itself (Debian-slim doesn't ship it; use the .deb directly)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium \
-    && rm -rf /var/lib/apt/lists/* \
-    || (echo "[!] chromium apt install failed; trying chrome" \
-        && curl -sSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-        && apt-get update \
-        && apt-get install -y /tmp/chrome.deb \
-        && rm -rf /var/lib/apt/lists/* /tmp/chrome.deb)
+# chromium itself (Debian-slim doesn't ship it; use google-chrome .deb directly — apt chromium not in main)
+RUN set -eux; \
+    curl -sSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends /tmp/chrome.deb; \
+    rm -rf /var/lib/apt/lists/* /tmp/chrome.deb; \
+    google-chrome --version || echo "chrome version probe failed"
 
 # ---------- build: cobalt api (node) ----------
 FROM base AS build-cobalt
@@ -76,8 +74,9 @@ ENV PATH="/opt/ysg-venv/bin:$PATH" \
     API_URL="http://localhost:9000/" \
     API_AUTH_REQUIRED=0 \
     DURATION_LIMIT=7200 \
-    # tell cobalt to use our local ysg webserver
-    YOUTUBE_SESSION_SERVER="http://127.0.0.1:8080/" \
+    # cobalt queries <server>/get_pot (POST); our proxy.cjs shim maps it to ysg's GET /token.
+    # so point cobalt at the PROXY port, not at ysg directly
+    YOUTUBE_SESSION_SERVER="http://127.0.0.1:18789/" \
     YOUTUBE_SESSION_INNERTUBE_CLIENT="WEB" \
     YSG_UPDATE_INTERVAL=300
 
