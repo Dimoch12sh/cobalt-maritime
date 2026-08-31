@@ -65,9 +65,10 @@ const cobalt = childSupervise(
 
 // 2) yt-session-generator (webserver mode) — тільки якщо /app/yt-session-generator існує
 const ysgScript = '/app/yt-session-generator/potoken-generator.py';
+const ysgPython = fs.existsSync('/opt/ysg-venv/bin/python3') ? '/opt/ysg-venv/bin/python3' : 'python3';
 if (fs.existsSync(ysgScript)) {
   const ysg = childSupervise(
-    'ysg', 'python3', [
+    'ysg', ysgPython, [
       ysgScript,
       '--bind', '127.0.0.1',
       '--port', String(YSG_PORT),
