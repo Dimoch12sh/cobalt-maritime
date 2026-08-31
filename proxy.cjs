@@ -133,41 +133,6 @@ process.on('exit', () => { try { if (ysgProc) ysgProc.kill('SIGTERM'); } catch {
 
 // ---------- http ----------
 
-// ---------- /debug/sys — runs diagnostic commands ----------
-if (path === '/debug/sys' && authorized(req)) {
-  const { execFile } = require('child_process');
-  const out = {};
-  const cmds = [
-    ['id', []],
-    ['ls', ['-la', '/usr/bin/', '|', 'grep', '-Ei', 'chrome|chromium']],
-    ['which', ['google-chrome']],
-    ['which', ['chromium']],
-    ['dpkg', ['-l', '|', 'grep', '-Ei', 'chrome|chromium']],
-    ['sh', ['-c', 'Xvfb :99 -ac -screen 0 1280x720x16 & sleep 1; google-chrome --no-sandbox --headless --version || echo no_chrome']],
-  ];
-  // simple sequential exec
-  (async () => {
-    let txt = '';
-    for (const [c, a] of cmds) {
-      txt += '\n=== ' + c + ' ' + a.join(' ') + ' ===\n';
-      try {
-        const r = await new Promise((res) => {
-          const p = require('child_process').spawn(c, a, { stdio: ['ignore','pipe','pipe'] });
-          let so='', se='';
-          p.stdout.on('data', d => so += d);
-          p.stderr.on('data', d => se += d);
-          p.on('close', code => res({ code, so, se }));
-          setTimeout(() => { try { p.kill(); } catch {}; res({ code: -1, so, se: se + '\n[TIMEOUT]' }); }, 8000);
-        });
-        txt += 'exit=' + r.code + '\n' + r.so + r.se;
-      } catch (e) { txt += 'ERR: ' + e.message; }
-    }
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end(txt);
-  })();
-  return;
-}
-
 function authorized(req) {
   if (!GATEWAY_KEY) return true;
   const h = req.headers['x-key'] || '';
@@ -237,6 +202,27 @@ const server = http.createServer((req, res) => {
       });
       up.end();
       return;
+    }
+    // system diagnostics (chrome, RAM, shm)
+    if (path === '/debug/sys') {
+      if (!authorized(req)) { res.writeHead(401); return res.end('{"error":"unauthorized"}'); }
+      const { execSync } = require('child_process');
+      const probes = [
+        'id',
+        'which google-chrome google-chrome-stable chromium chromium-browser 2>&1',
+        'google-chrome --version 2>&1 || true',
+        'free -m',
+        'df -h /dev/shm /tmp 2>&1',
+        'ps -ef | head -25',
+      ];
+      let txt = '';
+      for (const cmd of probes) {
+        txt += '\n=== ' + cmd + ' ===\n';
+        try { txt += execSync(cmd, { encoding: 'utf8', timeout: 8000 }); }
+        catch (e) { txt += '(err: ' + (e.message || e) + ')\n'; }
+      }
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      return res.end(txt);
     }
     if (!authorized(req)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
