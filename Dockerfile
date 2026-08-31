@@ -55,8 +55,9 @@ RUN python3 -m venv /opt/ysg-venv \
 RUN sed -i 's/await self.sleep(0.5)/await self.sleep(2)/' /opt/ysg-venv/lib/python3.*/site-packages/nodriver/core/browser.py || true
 # patch: ysg runs as root under our supervisor, nodriver 0.32 doesn't auto-disable sandbox — force it
 RUN sed -i 's/browser = await nodriver.start(headless=False,/browser = await nodriver.start(headless=False, sandbox=False,/g' /src/ysg/potoken_generator/extractor.py || true
-# add extra chrome flags for headless-safe operation
-RUN sed -i 's|browser_executable_path=self.browser_path,|browser_executable_path=self.browser_path, browser_args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],|' /src/ysg/potoken_generator/extractor.py || true
+# add extra chrome flags: no-sandbox for root, dev-shm for docker, autoplay policy —
+# without user gesture Chrome 152 refuses to start playback => no POST /youtubei/v1/player => ysg timeout
+RUN sed -i 's|browser_executable_path=self.browser_path,|browser_executable_path=self.browser_path, browser_args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--autoplay-policy=no-user-gesture-required", "--mute-audio", "--lang=en-US"],|' /src/ysg/potoken_generator/extractor.py || true
 
 # ---------- final: runtime ----------
 FROM base AS api
