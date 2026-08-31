@@ -114,6 +114,42 @@ setTimeout(() => { ysgStartAllowed = true; startYsg(); }, 30000);
 process.on('exit', () => { try { if (ysgProc) ysgProc.kill('SIGTERM'); } catch {} });
 
 // ---------- http ----------
+
+// ---------- /debug/sys — runs diagnostic commands ----------
+if (path === '/debug/sys' && authorized(req)) {
+  const { execFile } = require('child_process');
+  const out = {};
+  const cmds = [
+    ['id', []],
+    ['ls', ['-la', '/usr/bin/', '|', 'grep', '-Ei', 'chrome|chromium']],
+    ['which', ['google-chrome']],
+    ['which', ['chromium']],
+    ['dpkg', ['-l', '|', 'grep', '-Ei', 'chrome|chromium']],
+    ['sh', ['-c', 'Xvfb :99 -ac -screen 0 1280x720x16 & sleep 1; google-chrome --no-sandbox --headless --version || echo no_chrome']],
+  ];
+  // simple sequential exec
+  (async () => {
+    let txt = '';
+    for (const [c, a] of cmds) {
+      txt += '\n=== ' + c + ' ' + a.join(' ') + ' ===\n';
+      try {
+        const r = await new Promise((res) => {
+          const p = require('child_process').spawn(c, a, { stdio: ['ignore','pipe','pipe'] });
+          let so='', se='';
+          p.stdout.on('data', d => so += d);
+          p.stderr.on('data', d => se += d);
+          p.on('close', code => res({ code, so, se }));
+          setTimeout(() => { try { p.kill(); } catch {}; res({ code: -1, so, se: se + '\n[TIMEOUT]' }); }, 8000);
+        });
+        txt += 'exit=' + r.code + '\n' + r.so + r.se;
+      } catch (e) { txt += 'ERR: ' + e.message; }
+    }
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end(txt);
+  })();
+  return;
+}
+
 function authorized(req) {
   if (!GATEWAY_KEY) return true;
   const h = req.headers['x-key'] || '';
