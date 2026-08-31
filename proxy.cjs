@@ -66,21 +66,52 @@ const cobalt = childSupervise(
 // 2) yt-session-generator (webserver mode) — тільки якщо /app/yt-session-generator існує
 const ysgScript = '/app/yt-session-generator/potoken-generator.py';
 const ysgPython = fs.existsSync('/opt/ysg-venv/bin/python3') ? '/opt/ysg-venv/bin/python3' : 'python3';
-if (fs.existsSync(ysgScript)) {
-  const ysg = childSupervise(
-    'ysg', ysgPython, [
-      ysgScript,
-      '--bind', '127.0.0.1',
-      '--port', String(YSG_PORT),
-      '--update-interval', process.env.YSG_UPDATE_INTERVAL || '300',
-    ],
-    '/app/yt-session-generator', {
-      DISPLAY: ':99',
-    },
-    DATA_DIR + '/ysg.log', 10000
-  );
-  process.on('exit', () => { try { ysg.stop(); } catch {} });
+
+// Find chrome binary for ysg
+const chromeCandidates = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium', '/usr/bin/chromium-browser'];
+let ysgChromePath = '';
+for (const p of chromeCandidates) { if (fs.existsSync(p)) { ysgChromePath = p; break; } }
+
+let ysgProc = null;
+let ysgStartAllowed = false;
+let ysgRestartAt = 0;
+
+function startYsg() {
+  if (!fs.existsSync(ysgScript)) return;
+  if (!ysgStartAllowed) return;
+  if (Date.now() < ysgRestartAt) return;
+  if (ysgProc && ysgProc.exitCode === null) return;
+  const args = [ysgScript, '--bind', '127.0.0.1', '--port', String(YSG_PORT),
+                '--update-interval', process.env.YSG_UPDATE_INTERVAL || '300'];
+  if (ysgChromePath) args.push('--chrome-path', ysgChromePath);
+  let out;
+  try { out = fs.openSync(DATA_DIR + '/ysg.log', 'a'); } catch { out = 'inherit'; }
+  try {
+    ysgProc = spawn(ysgPython, args, {
+      cwd: '/app/yt-session-generator',
+      env: { ...process.env, DISPLAY: ':99' },
+      stdio: ['ignore', out, out],
+    });
+    LOG('[ysg] spawned pid=' + ysgProc.pid + ' chrome=' + ysgChromePath);
+    ysgProc.on('exit', (code, sig) => {
+      LOG('[ysg] exited code=' + code + ' sig=' + sig);
+      ysgProc = null;
+      // backoff: 30s, 60s, 120s, 240s — cap 240
+      const backoff = Math.min(240000, 30000 * Math.max(1, Math.floor(Math.random() * 4 + 1)));
+      ysgRestartAt = Date.now() + backoff;
+      LOG('[ysg] next restart in ' + (backoff / 1000) + 's');
+      if (ysgStartAllowed) setTimeout(startYsg, backoff);
+    });
+  } catch (e) {
+    LOG('[ysg] spawn failed: ' + e.message);
+    ysgRestartAt = Date.now() + 60000;
+  }
 }
+// give chromium/Xvfb 30s before first attempt
+setTimeout(() => { ysgStartAllowed = true; startYsg(); }, 30000);
+
+process.on('exit', () => { try { if (ysgProc) ysgProc.kill('SIGTERM'); } catch {} });
 
 // ---------- http ----------
 function authorized(req) {
