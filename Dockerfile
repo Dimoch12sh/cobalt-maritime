@@ -13,8 +13,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git python3 make g++ ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# upstream cobalt sources (pinned to v11 tag = 11.7.1)
-RUN git clone --depth 1 --branch 11 https://github.com/imputnet/cobalt.git /app
+# upstream cobalt sources (pinned to the exact revision of the official :11 image)
+RUN git clone --depth 1 https://github.com/imputnet/cobalt.git /app \
+    && cd /app && git fetch --depth 1 origin a636575b09de1fc55d9b8cd98cac88f5f2f16b42 \
+    && git checkout a636575b09de1fc55d9b8cd98cac88f5f2f16b42
 
 RUN corepack enable \
     && pnpm install --prod --frozen-lockfile \
