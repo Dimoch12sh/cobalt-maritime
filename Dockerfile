@@ -54,6 +54,10 @@ RUN python3 -m venv /opt/ysg-venv \
     && /opt/ysg-venv/bin/pip install --no-cache-dir -r requirements.txt
 # patch: chromium-driven anti-bot detection needs slower startup
 RUN sed -i 's/await self.sleep(0.5)/await self.sleep(2)/' /opt/ysg-venv/lib/python3.12/site-packages/nodriver/core/browser.py || true
+# patch: ysg runs as root under our supervisor, nodriver 0.32 doesn't auto-disable sandbox — force it
+RUN sed -i 's/browser = await nodriver.start(headless=False,/browser = await nodriver.start(headless=False, sandbox=False,/g' /src/ysg/potoken_generator/extractor.py || true
+# add extra chrome flags for headless-safe operation
+RUN sed -i 's|browser_executable_path=self.browser_path,|browser_executable_path=self.browser_path, browser_args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],|' /src/ysg/potoken_generator/extractor.py || true
 
 # ---------- final: runtime ----------
 FROM base AS api
