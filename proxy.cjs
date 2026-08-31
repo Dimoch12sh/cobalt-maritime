@@ -203,23 +203,24 @@ const server = http.createServer((req, res) => {
       up.end();
       return;
     }
-    // system diagnostics (chrome, RAM, shm)
+    // system diagnostics (chrome, RAM, shm, embed page state)
     if (path === '/debug/sys') {
       if (!authorized(req)) { res.writeHead(401); return res.end('{"error":"unauthorized"}'); }
       const { execSync } = require('child_process');
       const probes = [
-        'id',
-        'which google-chrome google-chrome-stable chromium chromium-browser 2>&1',
-        'google-chrome --version 2>&1 || true',
-        'free -m',
-        'df -h /dev/shm /tmp 2>&1',
-        'ps -ef | head -25',
+        ['id', 8000],
+        ['free -m', 8000],
+        ['df -h /dev/shm /tmp 2>&1', 8000],
+        ['ps -ef | grep -vE "kworker|kthread|\\[" | head -20', 8000],
+        // what does the youtube embed page actually render? (player / bot-wall / consent)
+        ['google-chrome --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=20000 --dump-dom https://www.youtube.com/embed/jNQXAC9IVRw 2>/dev/null | grep -oE "movie_player|Video unavailable|Sign in to confirm|consent|consent.youtube" | sort | uniq -c', 45000],
+        ['google-chrome --headless=new --no-sandbox --disable-gpu --virtual-time-budget=20000 --dump-dom https://www.youtube.com/embed/jNQXAC9IVRw 2>/dev/null | tail -c 1500', 45000],
       ];
       let txt = '';
-      for (const cmd of probes) {
-        txt += '\n=== ' + cmd + ' ===\n';
-        try { txt += execSync(cmd, { encoding: 'utf8', timeout: 8000 }); }
-        catch (e) { txt += '(err: ' + (e.message || e) + ')\n'; }
+      for (const [cmd, tmo] of probes) {
+        txt += '\n=== ' + cmd.slice(0, 120) + ' ===\n';
+        try { txt += execSync(cmd, { encoding: 'utf8', timeout: tmo }); }
+        catch (e) { txt += '(err: ' + String((e.stdout || '') + (e.message || e)).slice(0, 800) + ')\n'; }
       }
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end(txt);
