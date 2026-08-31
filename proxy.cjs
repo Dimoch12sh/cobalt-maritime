@@ -73,6 +73,24 @@ const chromeCandidates = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stab
 let ysgChromePath = '';
 for (const p of chromeCandidates) { if (fs.existsSync(p)) { ysgChromePath = p; break; } }
 
+// Start Xvfb on :99 if available (ysg uses headless=False and needs an X display)
+let xvfbProc = null;
+function startXvfb() {
+  if (xvfbProc && xvfbProc.exitCode === null) return;
+  if (!fs.existsSync('/usr/bin/Xvfb')) {
+    LOG('[xvfb] /usr/bin/Xvfb not present; ysg will need headless mode');
+    return;
+  }
+  try {
+    xvfbProc = spawn('/usr/bin/Xvfb', [':99', '-ac', '-screen', '0', '1280x720x16', '-nolisten', 'tcp'], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    LOG('[xvfb] spawned pid=' + xvfbProc.pid + ' on :99');
+    xvfbProc.on('exit', (code) => LOG('[xvfb] exited code=' + code));
+  } catch (e) { LOG('[xvfb] spawn failed: ' + e.message); }
+}
+startXvfb();
+
 let ysgProc = null;
 let ysgStartAllowed = false;
 let ysgRestartAt = 0;
