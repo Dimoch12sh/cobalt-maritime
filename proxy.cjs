@@ -16,7 +16,7 @@ const fs = require('fs');
 const PORT          = parseInt(process.env.PORT || '18789', 10);
 const GATEWAY_KEY   = process.env.GATEWAY_KEY || '';
 const COBALT_PORT   = parseInt(process.env.API_PORT || '9000', 10);
-const YSG_PORT      = 8080;
+const YSG_PORT      = 9998; // NB: 8080/8081/8082 are taken by maritime-init (port fwd/exec/cmd servers)
 const DATA_DIR      = fs.existsSync('/data') ? '/data' : '/tmp';
 const COBALT_DIR    = fs.existsSync('/app') && fs.existsSync('/app/src/cobalt.js') ? '/app' : '/cobalt';
 
@@ -186,9 +186,9 @@ const server = http.createServer((req, res) => {
         '\n\nps:\n' + tryPs()
       );
     }
-    // cobalt -> ysg: GET /token  (cobalt posts to /get_pot)
+    // cobalt -> ysg shim: cobalt POSTs /get_pot (iv-org style); ysg only has GET /token.
+    // NOTE: no auth here — cobalt calls it internally from localhost without X-Key.
     if (path === '/get_pot' && fs.existsSync(ysgScript)) {
-      if (!authorized(req)) { res.writeHead(401); return res.end('{"error":"unauthorized"}'); }
       const up = http.request({
         hostname: '127.0.0.1', port: YSG_PORT, method: 'GET', path: '/token',
         headers: { 'User-Agent': 'cobalt/11' },
