@@ -1,18 +1,44 @@
 # syntax=docker/dockerfile:1
-# cobalt processing instance for Maritime.sh micro-VM.
-# glibc (bookworm) base — maritime-init is a glibc binary; musl/Alpine => ENOENT (-2).
-# PID 1 = node proxy.cjs (supervisor + contract adapter + key-gated proxy).
-# cobalt api runs as supervised child; PID 1 never exits (uncaughtException guarded).
+# Cobalt processing instance for Maritime.sh micro-VM.
+#   - glibc (bookworm) base; maritime-init is glibc.
+#   - PID 1 = node proxy.cjs (supervisor + contract adapter + key-gated proxy).
+#   - cobalt api runs as supervised child on :9000.
+#   - yt-session-generator runs as supervised child on :8080 (with Xvfb+Chromium).
+# cobalt queries ysg via POST /get_pot; shim in proxy.cjs maps it to ysg's GET /token.
 
+# ---------- base: toolchain + xvfb + chromium + python for ysg ----------
 FROM node:24-bookworm-slim AS base
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
 
-FROM base AS build
-WORKDIR /app
+ENV DEBIAN_FRONTEND=noninteractive \
+    PNPM_HOME="/pnpm" \
+    PATH="/pnpm:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# chromium + xvfb + ffmpeg + python for ysg (later stages inherit)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git python3 make g++ ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        git ca-certificates curl \
+        python3 python3-pip python3-venv \
+        xvfb xauth \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+        libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+        libgbm1 libpango-1.0-0 libcairo2 libasound2 libatk-bridge2.0-0 \
+        libatspi2.0-0 fonts-liberation \
+        ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# chromium itself (Debian-slim doesn't ship it; use the .deb directly)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium \
+    && rm -rf /var/lib/apt/lists/* \
+    || (echo "[!] chromium apt install failed; trying chrome" \
+        && curl -sSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+        && apt-get update \
+        && apt-get install -y /tmp/chrome.deb \
+        && rm -rf /var/lib/apt/lists/* /tmp/chrome.deb)
+
+# ---------- build: cobalt api (node) ----------
+FROM base AS build-cobalt
+WORKDIR /app
 RUN git clone --depth 1 https://github.com/imputnet/cobalt.git /app \
     && cd /app && git fetch --depth 1 origin a636575b09de1fc55d9b8cd98cac88f5f2f16b42 \
     && git checkout a636575b09de1fc55d9b8cd98cac88f5f2f16b42
@@ -20,19 +46,36 @@ RUN corepack enable \
     && pnpm install --prod --frozen-lockfile \
     && pnpm deploy --filter=@imput/cobalt-api --prod /prod/api
 
+# ---------- build: yt-session-generator (python venv) ----------
+FROM base AS build-ysg
+RUN git clone --depth 1 https://github.com/imputnet/yt-session-generator.git /src/ysg
+WORKDIR /src/ysg
+RUN python3 -m venv /opt/ysg-venv \
+    && /opt/ysg-venv/bin/pip install --no-cache-dir -r requirements.txt
+# patch: chromium-driven anti-bot detection needs slower startup
+RUN sed -i 's/await self.sleep(0.5)/await self.sleep(2)/' /opt/ysg-venv/lib/python3.12/site-packages/nodriver/core/browser.py || true
+
+# ---------- final: runtime ----------
 FROM base AS api
+
 WORKDIR /app
-COPY --from=build --chown=node:node /prod/api /app
-COPY --from=build --chown=node:node /app/.git /app/.git
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-# .cjs — /app/package.json has "type":"module"; a .js entry crashes ESM => PID 1 death => kernel panic
+COPY --from=build-cobalt --chown=node:node /prod/api /app
+COPY --from=build-cobalt --chown=node:node /app/.git /app/.git
+COPY --from=build-ysg    --chown=node:node /src/ysg /app/yt-session-generator
+COPY --from=build-ysg    --chown=node:node /opt/ysg-venv /opt/ysg-venv
+
+# supervisor: handles cobalt + ysg as child processes
 COPY proxy.cjs /app/proxy.cjs
 
-ENV API_URL="http://localhost:9000/"
-ENV API_AUTH_REQUIRED=0
-ENV DURATION_LIMIT=7200
+ENV PATH="/opt/ysg-venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    API_URL="http://localhost:9000/" \
+    API_AUTH_REQUIRED=0 \
+    DURATION_LIMIT=7200 \
+    # tell cobalt to use our local ysg webserver
+    YOUTUBE_SESSION_SERVER="http://127.0.0.1:8080/" \
+    YOUTUBE_SESSION_INNERTUBE_CLIENT="WEB" \
+    YSG_UPDATE_INTERVAL=300
 
 USER node
 EXPOSE 18789
